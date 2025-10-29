@@ -1,4 +1,4 @@
-# futures-concurrency-dynamic-merge
+# futures-concurrency-dynamic
 
 A dynamic merge combinator for Rust streams, based on [futures-concurrency](https://github.com/yoshuawuyts/futures-concurrency).
 
