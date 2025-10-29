@@ -1,0 +1,13 @@
+[package]
+name = "futures-concurrency-dynamic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+futures-concurrency = "7.6.3"
+futures-core = "0.3.31"
+pin-project = "1.1.10"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3.31"
