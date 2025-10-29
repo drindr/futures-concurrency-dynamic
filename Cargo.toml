@@ -2,6 +2,8 @@
 name = "futures-concurrency-dynamic"
 version = "0.1.0"
 edition = "2021"
+description = "A dynamic extension of the futures-concurrency"
+license = "MIT or Apache-2.0"
 
 [dependencies]
 futures-concurrency = "7.6.3"
