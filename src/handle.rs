@@ -218,14 +218,13 @@ impl<'a, T> Stream for DynamicMergeStream<'a, T> {
 ///
 /// # Type Parameters
 ///
+/// - `'a`: Lifetime of the streams (defaults to `'static` for owned streams)
 /// - `T`: The item type that all streams must produce
 ///
-/// For non-`'static` streams (streams that borrow data), the handle can accept
-/// borrowed streams with the appropriate lifetime.
-pub fn dynamic_merge_with_handle<T>() -> (
-    DynamicMergeStream<'static, T>,
-    DynamicMergeHandle<'static, T>,
-) {
+/// The lifetime parameter allows borrowed streams. Rust's type inference will
+/// typically infer the correct lifetime automatically.
+pub fn dynamic_merge_with_handle<'a, T>() -> (DynamicMergeStream<'a, T>, DynamicMergeHandle<'a, T>)
+{
     dynamic_merge_with_handle_and_capacity(0)
 }
 
@@ -243,12 +242,14 @@ pub fn dynamic_merge_with_handle<T>() -> (
 /// let (stream, mut handle) = dynamic_merge_with_handle_and_capacity::<i32>(10);
 /// handle.push(stream::iter(vec![1, 2, 3]));
 /// ```
-pub fn dynamic_merge_with_handle_and_capacity<T>(
+///
+/// # Type Parameters
+///
+/// - `'a`: Lifetime of the streams
+/// - `T`: The item type that all streams must produce
+pub fn dynamic_merge_with_handle_and_capacity<'a, T>(
     capacity: usize,
-) -> (
-    DynamicMergeStream<'static, T>,
-    DynamicMergeHandle<'static, T>,
-) {
+) -> (DynamicMergeStream<'a, T>, DynamicMergeHandle<'a, T>) {
     let shared = Arc::new(Mutex::new(SharedMerge {
         merge: DynamicMerge::with_capacity(capacity),
     }));
@@ -418,5 +419,24 @@ mod tests {
 
         items.sort();
         assert_eq!(items, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[tokio::test]
+    async fn test_borrowed_streams() {
+        let data = vec![1, 2, 3, 4, 5];
+        let (mut stream, mut handle) = dynamic_merge_with_handle::<&i32>();
+
+        // Push streams that borrow from data
+        handle.push(stream::iter(&data[0..2]));
+        handle.push(stream::iter(&data[2..5]));
+        handle.close();
+
+        let mut items = Vec::new();
+        while let Some(&item) = stream.next().await {
+            items.push(item);
+        }
+
+        items.sort();
+        assert_eq!(items, vec![1, 2, 3, 4, 5]);
     }
 }
