@@ -55,6 +55,7 @@ async fn main() {
 - `push(stream)` - Add a stream (can be called anytime)
 - `len()` / `is_empty()` - Query active stream count
 - `clear()` - Remove all streams
+- `collect()` - The stream end after all the streams are consumed
 
 ## License
 
