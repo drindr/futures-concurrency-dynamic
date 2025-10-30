@@ -50,12 +50,54 @@ async fn main() {
 
 ## API
 
+### Direct API
+
 - `DynamicMerge::new()` - Create empty merge
 - `DynamicMerge::with_capacity(n)` - Pre-allocate capacity
 - `push(stream)` - Add a stream (can be called anytime)
 - `len()` / `is_empty()` - Query active stream count
 - `clear()` - Remove all streams
-- `collect()` - The stream end after all the streams are consumed
+- `close()` - Signal no more streams will be added
+
+### Handle-based API
+
+For cases where you need separate mutable access to the stream and the ability to push new streams:
+
+```rust
+use futures_concurrency_dynamic::dynamic_merge_with_handle;
+use futures_util::StreamExt;
+
+#[tokio::main]
+async fn main() {
+    // Split into stream and handle components
+    let (mut stream, mut handle) = dynamic_merge_with_handle::<i32>();
+
+    // One task pushes streams
+    let producer = tokio::spawn(async move {
+        handle.push(futures_util::stream::iter(vec![1, 2, 3]));
+        handle.push(futures_util::stream::iter(vec![4, 5, 6]));
+        handle.close();
+    });
+
+    // Another task consumes from the stream
+    let consumer = tokio::spawn(async move {
+        while let Some(value) = stream.next().await {
+            println!("Got: {}", value);
+        }
+    });
+
+    producer.await.unwrap();
+    consumer.await.unwrap();
+}
+```
+
+**Handle API:**
+- `dynamic_merge_with_handle()` - Create stream and handle pair
+- `DynamicMergeHandle::push(stream)` - Add a stream via handle
+- `DynamicMergeHandle::close()` - Signal completion via handle
+- `DynamicMergeHandle::len()` / `is_empty()` - Query via handle
+- `DynamicMergeHandle::clear()` - Clear all streams via handle
+- `DynamicMergeHandle::clone()` - Clone the handle for shared access
 
 ## License
 
