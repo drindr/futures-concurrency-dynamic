@@ -6,16 +6,11 @@
 //!
 //! This allows different parts of your code to hold mutable references to each independently.
 
-use crate::dynamic_merge::DynamicMerge;
+use crate::DynamicMerge;
 use futures_core::Stream;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-
-/// Shared wrapper around DynamicMerge for thread-safe access.
-struct SharedMerge<'a, T> {
-    merge: DynamicMerge<'a, T>,
-}
 
 /// A handle for pushing new streams into a `DynamicMergeStream`.
 ///
@@ -36,18 +31,15 @@ struct SharedMerge<'a, T> {
 /// handle.push(stream::iter(vec![1, 2, 3]));
 /// handle.push(stream::iter(vec![4, 5, 6]));
 ///
-/// // Signal we're done adding streams
-/// handle.close();
-///
 /// // Poll the stream elsewhere
 /// let items: Vec<i32> = stream.collect().await;
 /// # }
 /// ```
-pub struct DynamicMergeHandle<'a, T> {
-    shared: Arc<Mutex<SharedMerge<'a, T>>>,
+pub struct DynamicMergeHandle<T> {
+    shared: Arc<Mutex<DynamicMerge<T>>>,
 }
 
-impl<'a, T> DynamicMergeHandle<'a, T> {
+impl<T> DynamicMergeHandle<T> {
     /// Pushes a new stream into the merge.
     ///
     /// The stream will be polled concurrently with other streams. When the stream
@@ -66,9 +58,9 @@ impl<'a, T> DynamicMergeHandle<'a, T> {
     /// ```
     pub fn push<S>(&mut self, stream: S)
     where
-        S: Stream<Item = T> + Send + 'a,
+        S: Stream<Item = T> + Send + 'static,
     {
-        self.shared.lock().unwrap().merge.push(stream);
+        self.shared.lock().unwrap().push(stream);
     }
 
     /// Returns the number of active streams currently in the merge.
@@ -86,7 +78,7 @@ impl<'a, T> DynamicMergeHandle<'a, T> {
     /// assert_eq!(handle.len(), 1);
     /// ```
     pub fn len(&self) -> usize {
-        self.shared.lock().unwrap().merge.len()
+        self.shared.lock().unwrap().len()
     }
 
     /// Returns `true` if there are no active streams in the merge.
@@ -100,43 +92,7 @@ impl<'a, T> DynamicMergeHandle<'a, T> {
     /// assert!(handle.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        self.shared.lock().unwrap().merge.is_empty()
-    }
-
-    /// Signals that no more streams will be added to this merge.
-    ///
-    /// After calling this method, the merge will complete (return `Ready(None)`)
-    /// once all current streams are exhausted.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use futures_concurrency_dynamic::dynamic_merge_with_handle;
-    /// use futures_util::stream;
-    ///
-    /// let (stream, mut handle) = dynamic_merge_with_handle::<i32>();
-    /// handle.push(stream::iter(vec![1, 2, 3]));
-    /// handle.close();
-    /// ```
-    pub fn close(&self) {
-        self.shared.lock().unwrap().merge.close();
-    }
-
-    /// Returns `true` if the merge has been closed via [`close`](Self::close).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use futures_concurrency_dynamic::dynamic_merge_with_handle;
-    ///
-    /// let (stream, handle) = dynamic_merge_with_handle::<i32>();
-    /// assert!(!handle.is_closed());
-    ///
-    /// handle.close();
-    /// assert!(handle.is_closed());
-    /// ```
-    pub fn is_closed(&self) -> bool {
-        self.shared.lock().unwrap().merge.is_closed()
+        self.shared.lock().unwrap().is_empty()
     }
 
     /// Clears all streams from the merge, removing all active streams.
@@ -155,11 +111,11 @@ impl<'a, T> DynamicMergeHandle<'a, T> {
     /// assert_eq!(handle.len(), 0);
     /// ```
     pub fn clear(&mut self) {
-        self.shared.lock().unwrap().merge.clear();
+        self.shared.lock().unwrap().clear();
     }
 }
 
-impl<'a, T> Clone for DynamicMergeHandle<'a, T> {
+impl<T> Clone for DynamicMergeHandle<T> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
@@ -173,16 +129,16 @@ impl<'a, T> Clone for DynamicMergeHandle<'a, T> {
 /// corresponding `DynamicMergeHandle`.
 ///
 /// Created via [`dynamic_merge_with_handle`].
-pub struct DynamicMergeStream<'a, T> {
-    shared: Arc<Mutex<SharedMerge<'a, T>>>,
+pub struct DynamicMergeStream<T> {
+    shared: Arc<Mutex<DynamicMerge<T>>>,
 }
 
-impl<'a, T> Stream for DynamicMergeStream<'a, T> {
+impl<T> Stream for DynamicMergeStream<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut shared = self.shared.lock().unwrap();
-        Pin::new(&mut shared.merge).poll_next(cx)
+        Pin::new(&mut *shared).poll_next(cx)
     }
 }
 
@@ -207,7 +163,6 @@ impl<'a, T> Stream for DynamicMergeStream<'a, T> {
 /// // In one part of code: push streams
 /// handle.push(stream::iter(vec![1, 2, 3]));
 /// handle.push(stream::iter(vec![4, 5, 6]));
-/// handle.close();
 ///
 /// // In another part: consume the stream
 /// while let Some(item) = stream.next().await {
@@ -218,41 +173,12 @@ impl<'a, T> Stream for DynamicMergeStream<'a, T> {
 ///
 /// # Type Parameters
 ///
-/// - `'a`: Lifetime of the streams (defaults to `'static` for owned streams)
 /// - `T`: The item type that all streams must produce
 ///
-/// The lifetime parameter allows borrowed streams. Rust's type inference will
-/// typically infer the correct lifetime automatically.
-pub fn dynamic_merge_with_handle<'a, T>() -> (DynamicMergeStream<'a, T>, DynamicMergeHandle<'a, T>)
-{
-    dynamic_merge_with_handle_and_capacity(0)
-}
-
-/// Creates a new dynamic merge with a separate handle and pre-allocated capacity.
-///
-/// Like [`dynamic_merge_with_handle`] but pre-allocates space for `capacity` streams
-/// to avoid reallocations when adding streams.
-///
-/// # Examples
-///
-/// ```
-/// use futures_concurrency_dynamic::handle::dynamic_merge_with_handle_and_capacity;
-/// use futures_util::stream;
-///
-/// let (stream, mut handle) = dynamic_merge_with_handle_and_capacity::<i32>(10);
-/// handle.push(stream::iter(vec![1, 2, 3]));
-/// ```
-///
-/// # Type Parameters
-///
-/// - `'a`: Lifetime of the streams
-/// - `T`: The item type that all streams must produce
-pub fn dynamic_merge_with_handle_and_capacity<'a, T>(
-    capacity: usize,
-) -> (DynamicMergeStream<'a, T>, DynamicMergeHandle<'a, T>) {
-    let shared = Arc::new(Mutex::new(SharedMerge {
-        merge: DynamicMerge::with_capacity(capacity),
-    }));
+/// Note: All streams must be `Send + 'static`. If you need to use borrowed streams,
+/// use `DynamicMerge` directly instead of the handle-based API.
+pub fn dynamic_merge_with_handle<T>() -> (DynamicMergeStream<T>, DynamicMergeHandle<T>) {
+    let shared = Arc::new(Mutex::new(DynamicMerge::new()));
     let stream = DynamicMergeStream {
         shared: Arc::clone(&shared),
     };
@@ -271,7 +197,6 @@ mod tests {
 
         handle.push(stream::iter(vec![1, 2, 3]));
         handle.push(stream::iter(vec![4, 5, 6]));
-        handle.close();
 
         let mut items = Vec::new();
         while let Some(item) = stream.next().await {
@@ -286,37 +211,11 @@ mod tests {
     async fn test_separate_mutable_access() {
         let (mut stream, mut handle) = dynamic_merge_with_handle::<i32>();
 
-        // Simulate separate ownership - handle pushes, stream consumes
-        let push_task = tokio::spawn(async move {
-            handle.push(stream::iter(vec![1, 2, 3]));
-            tokio::task::yield_now().await;
-            handle.push(stream::iter(vec![4, 5, 6]));
-            handle.close();
-        });
+        // Push both streams first
+        handle.push(stream::iter(vec![1, 2, 3]));
+        handle.push(stream::iter(vec![4, 5, 6]));
 
-        let consume_task = tokio::spawn(async move {
-            let mut items = Vec::new();
-            while let Some(item) = stream.next().await {
-                items.push(item);
-            }
-            items.sort();
-            items
-        });
-
-        push_task.await.unwrap();
-        let items = consume_task.await.unwrap();
-        assert_eq!(items, vec![1, 2, 3, 4, 5, 6]);
-    }
-
-    #[tokio::test]
-    async fn test_handle_clone() {
-        let (mut stream, mut handle1) = dynamic_merge_with_handle::<i32>();
-        let mut handle2 = handle1.clone();
-
-        handle1.push(stream::iter(vec![1, 2, 3]));
-        handle2.push(stream::iter(vec![4, 5, 6]));
-        handle1.close();
-
+        // Then consume from the stream
         let mut items = Vec::new();
         while let Some(item) = stream.next().await {
             items.push(item);
@@ -327,8 +226,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_len_and_empty() {
-        let (stream, mut handle) = dynamic_merge_with_handle::<i32>();
+    async fn test_handle_clone() {
+        let (mut stream, mut handle1) = dynamic_merge_with_handle::<i32>();
+        let mut handle2 = handle1.clone();
+
+        handle1.push(stream::iter(vec![1, 2, 3]));
+        handle2.push(stream::iter(vec![4, 5, 6]));
+
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+
+        items.sort();
+        assert_eq!(items, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_handle_len_and_empty() {
+        let (_stream, mut handle) = dynamic_merge_with_handle::<i32>();
         assert!(handle.is_empty());
         assert_eq!(handle.len(), 0);
 
@@ -338,13 +254,11 @@ mod tests {
 
         handle.push(stream::iter(vec![4, 5, 6]));
         assert_eq!(handle.len(), 2);
-
-        drop(stream); // Allow streams to be dropped
     }
 
-    #[tokio::test]
-    async fn test_handle_clear() {
-        let (mut stream, mut handle) = dynamic_merge_with_handle::<i32>();
+    #[test]
+    fn test_handle_clear() {
+        let (_stream, mut handle) = dynamic_merge_with_handle::<i32>();
 
         handle.push(stream::iter(vec![1, 2, 3]));
         handle.push(stream::iter(vec![4, 5, 6]));
@@ -353,11 +267,6 @@ mod tests {
         handle.clear();
         assert_eq!(handle.len(), 0);
         assert!(handle.is_empty());
-
-        handle.close();
-
-        // Should complete immediately since empty and closed
-        assert_eq!(stream.next().await, None);
     }
 
     #[tokio::test]
@@ -380,63 +289,5 @@ mod tests {
 
         let item4 = stream.next().await;
         assert!(item4.is_some());
-
-        handle.close();
-        assert_eq!(stream.next().await, None);
-    }
-
-    #[tokio::test]
-    async fn test_handle_is_closed() {
-        let (_stream, handle) = dynamic_merge_with_handle::<i32>();
-        assert!(!handle.is_closed());
-
-        handle.close();
-        assert!(handle.is_closed());
-    }
-
-    #[tokio::test]
-    async fn test_empty_merge_waits_without_close() {
-        let (mut stream, _handle) = dynamic_merge_with_handle::<i32>();
-
-        // Without close, should return Pending
-        let result = futures_util::poll!(stream.next());
-        assert!(result.is_pending());
-    }
-
-    #[tokio::test]
-    async fn test_with_capacity() {
-        let (mut stream, mut handle) = dynamic_merge_with_handle_and_capacity::<i32>(10);
-
-        for i in 0..10 {
-            handle.push(stream::iter(vec![i]));
-        }
-        handle.close();
-
-        let mut items = Vec::new();
-        while let Some(item) = stream.next().await {
-            items.push(item);
-        }
-
-        items.sort();
-        assert_eq!(items, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    }
-
-    #[tokio::test]
-    async fn test_borrowed_streams() {
-        let data = vec![1, 2, 3, 4, 5];
-        let (mut stream, mut handle) = dynamic_merge_with_handle::<&i32>();
-
-        // Push streams that borrow from data
-        handle.push(stream::iter(&data[0..2]));
-        handle.push(stream::iter(&data[2..5]));
-        handle.close();
-
-        let mut items = Vec::new();
-        while let Some(&item) = stream.next().await {
-            items.push(item);
-        }
-
-        items.sort();
-        assert_eq!(items, vec![1, 2, 3, 4, 5]);
     }
 }

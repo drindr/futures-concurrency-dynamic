@@ -1,6 +1,8 @@
-//! Dynamic merge combinator for heterogeneous streams.
+//! Dynamic merge combinator built on top of futures-util's SelectAll.
 //!
-//! This crate provides two ways to use dynamic stream merging:
+//! This crate provides a wrapper around `futures_util::stream::SelectAll` that adds
+//! dynamic stream management capabilities with a convenient API for adding and managing
+//! multiple streams at runtime.
 //!
 //! ## 1. Direct API with `DynamicMerge`
 //!
@@ -15,7 +17,6 @@
 //! let mut merge = DynamicMerge::new();
 //! merge.push(stream::iter(vec![1, 2, 3]));
 //! merge.push(stream::iter(vec![4, 5, 6]));
-//! merge.close();
 //!
 //! while let Some(item) = merge.next().await {
 //!     println!("{}", item);
@@ -40,7 +41,6 @@
 //! let producer = tokio::spawn(async move {
 //!     handle.push(stream::iter(vec![1, 2, 3]));
 //!     handle.push(stream::iter(vec![4, 5, 6]));
-//!     handle.close();
 //! });
 //!
 //! // Another task can consume from the stream
@@ -54,6 +54,13 @@
 //! consumer.await.unwrap();
 //! # }
 //! ```
+//!
+//! ## Implementation Note
+//!
+//! This crate is built on top of `futures_util::stream::SelectAll`, providing a more
+//! ergonomic API while leveraging the proven implementation from the futures ecosystem.
+//! All streams must be `Send + 'static`. If you need to work with borrowed streams,
+//! consider using `futures_util::stream::SelectAll` directly.
 
 pub mod dynamic_merge;
 pub mod handle;
