@@ -11,12 +11,12 @@
 //!
 //! ```rust
 //! use futures_concurrency_dynamic::DynamicMerge;
-//! use futures_util::stream::{self, StreamExt};
+//! use futures_util::stream::{self, StreamExt, SelectAll};
 //!
 //! # async fn example() {
-//! let mut merge = DynamicMerge::new();
-//! merge.push(stream::iter(vec![1, 2, 3]));
-//! merge.push(stream::iter(vec![4, 5, 6]));
+//! let mut merge: DynamicMerge<'_, i32> = SelectAll::new();
+//! merge.push(Box::pin(stream::iter(vec![1, 2, 3])));
+//! merge.push(Box::pin(stream::iter(vec![4, 5, 6])));
 //!
 //! while let Some(item) = merge.next().await {
 //!     println!("{}", item);

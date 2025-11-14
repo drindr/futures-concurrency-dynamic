@@ -8,6 +8,7 @@
 
 use crate::DynamicMerge;
 use futures_core::Stream;
+use futures_util::stream::SelectAll;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -35,11 +36,11 @@ use std::task::{Context, Poll};
 /// let items: Vec<i32> = stream.collect().await;
 /// # }
 /// ```
-pub struct DynamicMergeHandle<T> {
-    shared: Arc<Mutex<DynamicMerge<T>>>,
+pub struct DynamicMergeHandle<'a, T> {
+    shared: Arc<Mutex<DynamicMerge<'a, T>>>,
 }
 
-impl<T> DynamicMergeHandle<T> {
+impl<'a, T> DynamicMergeHandle<'a, T> {
     /// Pushes a new stream into the merge.
     ///
     /// The stream will be polled concurrently with other streams. When the stream
@@ -58,9 +59,9 @@ impl<T> DynamicMergeHandle<T> {
     /// ```
     pub fn push<S>(&mut self, stream: S)
     where
-        S: Stream<Item = T> + Send + 'static,
+        S: Stream<Item = T> + Send + 'a,
     {
-        self.shared.lock().unwrap().push(stream);
+        self.shared.lock().unwrap().push(Box::pin(stream));
     }
 
     /// Returns the number of active streams currently in the merge.
@@ -115,7 +116,7 @@ impl<T> DynamicMergeHandle<T> {
     }
 }
 
-impl<T> Clone for DynamicMergeHandle<T> {
+impl<'a, T> Clone for DynamicMergeHandle<'a, T> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
@@ -129,11 +130,11 @@ impl<T> Clone for DynamicMergeHandle<T> {
 /// corresponding `DynamicMergeHandle`.
 ///
 /// Created via [`dynamic_merge_with_handle`].
-pub struct DynamicMergeStream<T> {
-    shared: Arc<Mutex<DynamicMerge<T>>>,
+pub struct DynamicMergeStream<'a, T> {
+    shared: Arc<Mutex<DynamicMerge<'a, T>>>,
 }
 
-impl<T> Stream for DynamicMergeStream<T> {
+impl<'a, T> Stream for DynamicMergeStream<'a, T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -175,10 +176,10 @@ impl<T> Stream for DynamicMergeStream<T> {
 ///
 /// - `T`: The item type that all streams must produce
 ///
-/// Note: All streams must be `Send + 'static`. If you need to use borrowed streams,
-/// use `DynamicMerge` directly instead of the handle-based API.
-pub fn dynamic_merge_with_handle<T>() -> (DynamicMergeStream<T>, DynamicMergeHandle<T>) {
-    let shared = Arc::new(Mutex::new(DynamicMerge::new()));
+/// Note: All streams must be `Send` but no longer require `'static` lifetime.
+pub fn dynamic_merge_with_handle<'a, T>() -> (DynamicMergeStream<'a, T>, DynamicMergeHandle<'a, T>)
+{
+    let shared = Arc::new(Mutex::new(SelectAll::new()));
     let stream = DynamicMergeStream {
         shared: Arc::clone(&shared),
     };
